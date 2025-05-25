@@ -29,40 +29,54 @@ def fetch_thread_replies():
     print("DEBUG: Slack API response:", data)
     if not data.get("ok"):
         raise RuntimeError(f"Slack API error: {data.get('error')}")
-    # bot 메시지는 제외하고, 실제 사람 혹은 다른 bot이 작성한 update 만 취급
+    # 사용자 메시지만 필터링
     return [m for m in data.get("messages", []) if m.get("user")]
 
-def post_to_notion(user, text, ts):
-    # 슬랙 ts 앞부분(초)로부터 ISO 날짜 문자열 생성
+def extract_block(full_text: str, question_title: str) -> str:
+    """
+    '질문 제목\n답변 내용' 형태에서
+    question_title 이후의 답변 부분만 리턴
+    """
+    parts = full_text.split(question_title, 1)
+    if len(parts) == 2:
+        return parts[1].strip()
+    return ""
+
+def post_to_notion(user: str, text: str, ts: str):
+    # ts 앞부분(초)만 골라 ISO date 생성
     created = datetime.fromtimestamp(float(ts.split('.')[0])).date().isoformat()
+
+    # Slack 메시지 안에 Q&A 형식으로 들어있는 각 답변 분리
+    yesterday_work = extract_block(text, "어제 어떤 작업을 마쳤나요?")
+    today_work     = extract_block(text, "오늘 어떤 작업을 할거에요?")
+    # (기분 질문은 free-form 이므로 전체 text 를 Rich text 에 그대로 넣습니다)
 
     payload = {
         "parent": {"database_id": NOTION_DATABASE_ID},
-            "properties": {
-            "작성자": {                  # Title 속성
-                "title": [
-                    {"text":{"content":user_id}}
-                ]
+        "properties": {
+            "작성자": {
+                "title": [{"text": {"content": user}}]
             },
             "기분": {
-                "rich_text":[{"text":{"content":text}}]
+                "rich_text": [{"text": {"content": text}}]
             },
             "어제한 일": {
-                "rich_text":[{"text":{"content":yesterday_work}}]
+                "rich_text": [{"text": {"content": yesterday_work}}]
             },
             "오늘할 일": {
-                "rich_text":[{"text":{"content":today_work}}]
+                "rich_text": [{"text": {"content": today_work}}]
             },
             "날짜": {
-                "date":{"start":created}
-            },
+                "date": {"start": created}
+            }
         },
-        # 페이지 본문에도 전체 텍스트를 덧붙여 줍니다.
         "children": [
             {
                 "object": "block",
                 "type": "paragraph",
-                "paragraph": {"rich_text": [{"text": {"content": text}}]}
+                "paragraph": {
+                    "rich_text": [{"text": {"content": text}}]
+                }
             }
         ]
     }
@@ -76,22 +90,7 @@ def post_to_notion(user, text, ts):
             "Content-Type": "application/json"
         }
     )
-    print(f"DEBUG: Notion POST status={res.status_code} for user={user}")
-    if res.status_code != 200:
-        print("Notion response:", res.text)
-
-def extract_block(full_text, question_title):
-    """
-    Slack 메시지 텍스트에서 qna 형식으로 작성된 블록을
-    "질문 제목\n답변 내용" 으로 주고받았다면, 
-    질문 제목 뒤의 답변 부분만 분리해 리턴합니다.
-    단순하게는 full_text.split(question_title,1)[1] 로 구현 가능합니다.
-    """
-    parts = full_text.split(question_title, 1)
-    if len(parts) == 2:
-        # 질문 제목 이후에 개행을 포함한 답변을 추출
-        return parts[1].strip()
-    return ""  # 못 찾으면 빈 문자열
+    print(f"DEBUG: Notion POST status={res.status_code} response={res.text}")
 
 def main():
     replies = fetch_thread_replies()
