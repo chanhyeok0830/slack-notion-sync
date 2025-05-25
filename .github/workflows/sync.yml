@@ -1,0 +1,31 @@
+name: Slack→Notion Daily Sync
+
+on:
+  schedule:
+    - cron: '2 0 * * *'
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - name: Install deps
+        run: |
+          pip install requests
+
+      - name: Run script
+        env:
+          SLACK_TOKEN:        ${{ secrets.SLACK_TOKEN }}
+          SLACK_CHANNEL_ID:   ${{ secrets.SLACK_CHANNEL_ID }}
+          SLACK_THREAD_TS:    ${{ secrets.SLACK_THREAD_TS }}
+          NOTION_TOKEN:       ${{ secrets.NOTION_TOKEN }}
+          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+        run: |
+          python slack_to_notion.py
