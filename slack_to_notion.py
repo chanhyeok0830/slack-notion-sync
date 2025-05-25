@@ -39,8 +39,8 @@ def post_to_notion(user, text, ts):
     payload = {
         "parent": {"database_id": NOTION_DATABASE_ID},
         "properties": {
-            # 제목 속성(Title)
-            "작성자": {
+            # 제목 속성(Name)
+            "Name": {
                 "title": [
                     {"text": {"content": user}}
                 ]
