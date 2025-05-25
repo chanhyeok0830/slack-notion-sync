@@ -1,14 +1,7 @@
 import os
 import requests
 from datetime import datetime
-
-# ─── 디버그 로그 ───
-print("DEBUG: SLACK_TOKEN startswith xoxb?", os.environ.get("SLACK_TOKEN", "").startswith("xoxb-"))
-print("DEBUG: SLACK_CHANNEL_ID =", os.environ.get("SLACK_CHANNEL_ID"))
-print("DEBUG: SLACK_THREAD_TS  =", os.environ.get("SLACK_THREAD_TS"))
-print("DEBUG: NOTION_TOKEN startswith ntn_?", os.environ.get("NOTION_TOKEN", "").startswith("ntn_"))
-print("DEBUG: NOTION_DATABASE_ID =", os.environ.get("NOTION_DATABASE_ID"))
-print("──────────────────────────────────────────────")
+from functools import lru_cache
 
 SLACK_TOKEN        = os.environ['SLACK_TOKEN']
 SLACK_CHANNEL_ID   = os.environ['SLACK_CHANNEL_ID']
@@ -16,72 +9,69 @@ SLACK_THREAD_TS    = os.environ['SLACK_THREAD_TS']
 NOTION_TOKEN       = os.environ['NOTION_TOKEN']
 NOTION_DATABASE_ID = os.environ['NOTION_DATABASE_ID']
 
+# USERNAME CACHE
+@lru_cache()
+def get_user_name(user_id: str) -> str:
+    resp = requests.get(
+        "https://slack.com/api/users.info",
+        params={"user": user_id},
+        headers={"Authorization": f"Bearer {SLACK_TOKEN}"}
+    ).json()
+    if resp.get("ok"):
+        return resp["user"]["profile"].get("real_name") or resp["user"]["name"]
+    return user_id  # fallback
+
 def fetch_thread_replies():
-    url = "https://slack.com/api/conversations.replies"
-    params = {
-        "channel": SLACK_CHANNEL_ID,
-        "ts": SLACK_THREAD_TS,
-        "limit": 100
-    }
-    headers = {"Authorization": f"Bearer {SLACK_TOKEN}"}
-    resp = requests.get(url, params=params, headers=headers)
-    data = resp.json()
-    print("DEBUG: Slack API response:", data)
+    data = requests.get(
+        "https://slack.com/api/conversations.replies",
+        params={"channel": SLACK_CHANNEL_ID, "ts": SLACK_THREAD_TS, "limit": 100},
+        headers={"Authorization": f"Bearer {SLACK_TOKEN}"}
+    ).json()
     if not data.get("ok"):
-        raise RuntimeError(f"Slack API error: {data.get('error')}")
-    # 사용자 메시지만 필터링
-    return [m for m in data.get("messages", []) if m.get("user")]
+        raise RuntimeError(data.get("error"))
+    # 첫 메시지(Geekbot 헤더)는 skip, attachments 있는 bot_message 만
+    return [
+        m for m in data["messages"][1:]
+        if m.get("attachments")
+    ]
 
-def extract_block(full_text: str, question_title: str) -> str:
-    """
-    '질문 제목\n답변 내용' 형태에서
-    question_title 이후의 답변 부분만 리턴
-    """
-    parts = full_text.split(question_title, 1)
-    if len(parts) == 2:
-        return parts[1].strip()
-    return ""
+def post_to_notion(msg: dict):
+    user_id = msg["user"]
+    user_name = get_user_name(user_id)
+    ts = msg["ts"].split(".")[0]
+    created = datetime.fromtimestamp(float(ts)).date().isoformat()
 
-def post_to_notion(user: str, text: str, ts: str):
-    # ts 앞부분(초)만 골라 ISO date 생성
-    created = datetime.fromtimestamp(float(ts.split('.')[0])).date().isoformat()
-
-    # Slack 메시지 안에 Q&A 형식으로 들어있는 각 답변 분리
-    yesterday_work = extract_block(text, "어제 어떤 작업을 마쳤나요?")
-    today_work     = extract_block(text, "오늘 어떤 작업을 할거에요?")
-    # (기분 질문은 free-form 이므로 전체 text 를 Rich text 에 그대로 넣습니다)
+    # attachments 순서대로 꺼내기
+    atts = msg["attachments"]
+    mood        = atts[0]["text"]
+    yesterday   = atts[1]["text"]
+    today       = atts[2]["text"]
+    # 네 번째 협업 질문은 필요하면 children 에 추가
+    collab      = atts[3]["text"]
 
     payload = {
         "parent": {"database_id": NOTION_DATABASE_ID},
         "properties": {
-            "작성자": {
-                "title": [{"text": {"content": user}}]
-            },
-            "기분": {
-                "rich_text": [{"text": {"content": text}}]
-            },
-            "어제한 일": {
-                "rich_text": [{"text": {"content": yesterday_work}}]
-            },
-            "오늘할 일": {
-                "rich_text": [{"text": {"content": today_work}}]
-            },
-            "날짜": {
-                "date": {"start": created}
-            }
+            "작성자":   {"title":     [{"text": {"content": user_name}}]},
+            "기분":     {"rich_text": [{"text": {"content": mood}}]},
+            "어제한 일": {"rich_text": [{"text": {"content": yesterday}}]},
+            "오늘할 일": {"rich_text": [{"text": {"content": today}}]},
+            "날짜":     {"date":      {"start": created}}
         },
         "children": [
             {
                 "object": "block",
                 "type": "paragraph",
                 "paragraph": {
-                    "rich_text": [{"text": {"content": text}}]
+                    "rich_text": [
+                        {"text": {"content": f"협업 필요: {collab}"}}
+                    ]
                 }
             }
         ]
     }
 
-    res = requests.post(
+    r = requests.post(
         "https://api.notion.com/v1/pages",
         json=payload,
         headers={
@@ -90,13 +80,13 @@ def post_to_notion(user: str, text: str, ts: str):
             "Content-Type": "application/json"
         }
     )
-    print(f"DEBUG: Notion POST status={res.status_code} response={res.text}")
+    if r.status_code != 200:
+        print("Notion error:", r.text)
 
 def main():
-    replies = fetch_thread_replies()
-    for msg in replies:
-        post_to_notion(msg['user'], msg.get('text', ''), msg['ts'])
-    print("DEBUG: sync complete, total posted:", len(replies))
+    for msg in fetch_thread_replies():
+        post_to_notion(msg)
+    print("Done.")
 
 if __name__ == "__main__":
     main()
