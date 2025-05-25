@@ -1,8 +1,9 @@
-name: Slack→Notion Daily Sync
+# .github/workflows/sync.yml
+name: Slack→Notion Hourly Sync
 
 on:
   schedule:
-    - cron: '2 0 * * *'
+    - cron: '0 * * * *'   # 매시 정각마다
   workflow_dispatch:
 
 jobs:
@@ -24,7 +25,6 @@ jobs:
         env:
           SLACK_TOKEN:        ${{ secrets.SLACK_TOKEN }}
           SLACK_CHANNEL_ID:   ${{ secrets.SLACK_CHANNEL_ID }}
-          SLACK_THREAD_TS:    ${{ secrets.SLACK_THREAD_TS }}
           NOTION_TOKEN:       ${{ secrets.NOTION_TOKEN }}
           NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
         run: |
