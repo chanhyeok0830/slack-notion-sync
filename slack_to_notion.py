@@ -38,33 +38,24 @@ def post_to_notion(user, text, ts):
 
     payload = {
         "parent": {"database_id": NOTION_DATABASE_ID},
-        "properties": {
-            # 제목 속성(작성자)
-            "작성자": {
+            "properties": {
+            "작성자": {                  # Title 속성
                 "title": [
-                    {"text": {"content": user}}
+                    {"text":{"content":user_id}}
                 ]
             },
-            # 날짜 속성(Date)
-            "날짜": {
-                "date": {"start": created}
-            },
-            # 나머지 속성 모두 Rich Text 타입으로 매핑
             "기분": {
-                "rich_text": [
-                    {"text": {"content": extract_block(text, "오늘 컨디션 어때요?")}}
-                ]
+                "rich_text":[{"text":{"content":text}}]
             },
             "어제한 일": {
-                "rich_text": [
-                    {"text": {"content": extract_block(text, "어제 어떤 작업을 마쳤나요?")}}
-                ]
+                "rich_text":[{"text":{"content":yesterday_work}}]
             },
             "오늘할 일": {
-                "rich_text": [
-                    {"text": {"content": extract_block(text, "오늘 어떤 작업을 할거에요?")}}
-                ]
-            }
+                "rich_text":[{"text":{"content":today_work}}]
+            },
+            "날짜": {
+                "date":{"start":created}
+            },
         },
         # 페이지 본문에도 전체 텍스트를 덧붙여 줍니다.
         "children": [
