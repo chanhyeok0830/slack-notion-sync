@@ -54,10 +54,11 @@ def post_to_notion(user, text, ts):
     print(f"DEBUG: Notion POST status={res.status_code} for user={user}")
 
 def main():
-    replies = fetch_thread_replies()
-    for msg in replies:
-        post_to_notion(msg['user'], msg['text'], msg['ts'])
-    print("DEBUG: sync complete, total posted:", len(replies))
+    resp = requests.get(url, params=params, headers=headers)
+    data = resp.json()
+    print("DEBUG: Slack API response:", data)
+    return [m for m in data.get("messages", []) if m.get("user")]
+
 
 if __name__=="__main__":
     main()
