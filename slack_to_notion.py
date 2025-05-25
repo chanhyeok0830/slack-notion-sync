@@ -9,17 +9,18 @@ SLACK_THREAD_TS    = os.environ['SLACK_THREAD_TS']
 NOTION_TOKEN       = os.environ['NOTION_TOKEN']
 NOTION_DATABASE_ID = os.environ['NOTION_DATABASE_ID']
 
-# USERNAME CACHE
 @lru_cache()
 def get_user_name(user_id: str) -> str:
+    """Slack user ID로 실제 이름을 가져옵니다."""
     resp = requests.get(
         "https://slack.com/api/users.info",
         params={"user": user_id},
         headers={"Authorization": f"Bearer {SLACK_TOKEN}"}
     ).json()
     if resp.get("ok"):
-        return resp["user"]["profile"].get("real_name") or resp["user"]["name"]
-    return user_id  # fallback
+        profile = resp["user"]["profile"]
+        return profile.get("real_name") or profile.get("display_name") or profile.get("name")
+    return user_id
 
 def fetch_thread_replies():
     data = requests.get(
@@ -29,25 +30,22 @@ def fetch_thread_replies():
     ).json()
     if not data.get("ok"):
         raise RuntimeError(data.get("error"))
-    # 첫 메시지(Geekbot 헤더)는 skip, attachments 있는 bot_message 만
-    return [
-        m for m in data["messages"][1:]
-        if m.get("attachments")
-    ]
+    # 첫 메시지는 헤더이므로 제외, attachments가 있는 메시지만 사용
+    return [m for m in data["messages"][1:] if m.get("attachments")]
 
 def post_to_notion(msg: dict):
-    user_id = msg["user"]
-    user_name = get_user_name(user_id)
+    # user가 없으면 bot 메시지의 username으로 fallback
+    user_id = msg.get("user") or msg.get("username", "Unknown")
+    user_name = get_user_name(user_id) if msg.get("user") else user_id
+
     ts = msg["ts"].split(".")[0]
     created = datetime.fromtimestamp(float(ts)).date().isoformat()
 
-    # attachments 순서대로 꺼내기
     atts = msg["attachments"]
-    mood        = atts[0]["text"]
-    yesterday   = atts[1]["text"]
-    today       = atts[2]["text"]
-    # 네 번째 협업 질문은 필요하면 children 에 추가
-    collab      = atts[3]["text"]
+    mood      = atts[0].get("text", "")
+    yesterday = atts[1].get("text", "")
+    today     = atts[2].get("text", "")
+    collab    = atts[3].get("text", "")
 
     payload = {
         "parent": {"database_id": NOTION_DATABASE_ID},
@@ -86,7 +84,7 @@ def post_to_notion(msg: dict):
 def main():
     for msg in fetch_thread_replies():
         post_to_notion(msg)
-    print("Done.")
+    print("Sync complete.")
 
 if __name__ == "__main__":
     main()
