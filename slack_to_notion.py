@@ -1,15 +1,5 @@
-# slack_to_notion.py
-import os
-import requests
+import os, requests
 from datetime import datetime
-
-# ─── 디버그 로그 ───
-print("DEBUG: SLACK_TOKEN startswith xoxb?", os.environ.get("SLACK_TOKEN","").startswith("xoxb-"))
-print("DEBUG: SLACK_CHANNEL_ID =", os.environ.get("SLACK_CHANNEL_ID"))
-print("DEBUG: SLACK_THREAD_TS  =", os.environ.get("SLACK_THREAD_TS"))
-print("DEBUG: NOTION_TOKEN startswith ntn_?", os.environ.get("NOTION_TOKEN","").startswith("ntn_"))
-print("DEBUG: NOTION_DATABASE_ID =", os.environ.get("NOTION_DATABASE_ID"))
-print("──────────────────────────────────────────────")
 
 SLACK_TOKEN        = os.environ['SLACK_TOKEN']
 SLACK_CHANNEL_ID   = os.environ['SLACK_CHANNEL_ID']
@@ -25,70 +15,83 @@ def fetch_thread_replies():
         "limit": 100
     }
     headers = {"Authorization": f"Bearer {SLACK_TOKEN}"}
-    resp = requests.get(url, params=params, headers=headers)
-    data = resp.json()
-    print("DEBUG: Slack API response:", data)
+    data = requests.get(url, params=params, headers=headers).json()
     if not data.get("ok"):
-        raise RuntimeError(f"Slack API error: {data.get('error')}")
-    # bot_id 가 있는 bot_message 중 parent_user_id 가 존재하는(=사람이 쓴 답변) 것만 필터
-    return [
-        m for m in data.get("messages", [])
-        if m.get("subtype")=="bot_message" and m.get("parent_user_id")
-    ]
+        raise RuntimeError(data.get("error"))
+    # bot 메시지는 빼고, 실제 유저 메시지만
+    return [m for m in data['messages'] if m.get('user')]
 
-def post_to_notion(msg):
-    user        = msg['username']             # 예: '공찬혁'
-    ts          = msg['ts']                   # 예: '1748047551.009099'
-    created_iso = datetime.fromtimestamp(float(ts.split('.')[0])).date().isoformat()
-
-    # 기본 프로퍼티들
-    properties = {
-        "작성자": {
-            "title": [
-                {"text": {"content": user}}
-            ]
-        },
-        "날짜": {
-            "date": {"start": created_iso}
-        }
-    }
-
-    # Slack attachments 를 순회하며 프로퍼티 추가
-    for att in msg.get("attachments", []):
-        key = att.get("title")     # 예: '어제 어떤 작업을 마쳤나요?'
-        val = att.get("text")      # 예: '회의록 작성, 노션&슬랙 연동 방법'
-        if not key or val is None:
-            continue
-        # Notion 컬럼 이름과 정확히 일치시켜야 합니다
-        properties[key] = {
-            "rich_text": [
-                {"text": {"content": val}}
-            ]
-        }
+def post_to_notion(user_name, text, ts):
+    # ts는 '1641371234.000200' 꼴 → 초 단위로 잘라 ISO 날짜 생성
+    date_iso = datetime.fromtimestamp(int(float(ts))).date().isoformat()
 
     payload = {
-        "parent": {"database_id": NOTION_DATABASE_ID},
-        "properties": properties
+      "parent": { "database_id": NOTION_DATABASE_ID },
+      "properties": {
+        # 갤러리 카드 타이틀로 쓸 속성 (title 타입)
+        "작성자": {
+          "title": [
+            {"text": {"content": user_name}}
+          ]
+        },
+        # 날짜 필드
+        "날짜": {
+          "date": { "start": date_iso }
+        },
+        # rich_text 속성들
+        "기분": {
+          "rich_text": [
+            {"text": {"content": extract_answer(text, "오늘 컨디션 어때요?")}}
+          ]
+        },
+        "어제한 일": {
+          "rich_text": [
+            {"text": {"content": extract_answer(text, "어제 어떤 작업을 마쳤나요?")}}
+          ]
+        },
+        "오늘할 일": {
+          "rich_text": [
+            {"text": {"content": extract_answer(text, "오늘 어떤 작업을 할거에요?")}}
+          ]
+        },
+      },
+      "children": [
+        {
+          "object": "block",
+          "type": "paragraph",
+          "paragraph": {
+            "rich_text": [
+              {"text": {"content": text}}
+            ]
+          }
+        }
+      ]
     }
 
-    res = requests.post(
-        "https://api.notion.com/v1/pages",
-        json=payload,
-        headers={
-            "Authorization": f"Bearer {NOTION_TOKEN}",
-            "Notion-Version": "2022-06-28",
-            "Content-Type": "application/json"
-        }
+    r = requests.post(
+      "https://api.notion.com/v1/pages",
+      headers={
+        "Authorization": f"Bearer {NOTION_TOKEN}",
+        "Notion-Version": "2022-06-28",
+        "Content-Type": "application/json"
+      },
+      json=payload
     )
-    print(f"DEBUG: Notion POST status={res.status_code} for user={user}")
-    if res.status_code != 200:
-        print("DEBUG: Notion response:", res.text)
+    print("Notion:", r.status_code, r.text)
+
+def extract_answer(full_text, question):
+    """
+    Geekbot이 붙여주는 질문 타이틀로 답변을
+    분리해서 리턴합니다. 단순 split 활용 예시:
+    """
+    if question in full_text:
+        return full_text.split(question,1)[1].strip()
+    return ""
 
 def main():
     replies = fetch_thread_replies()
     for msg in replies:
-        post_to_notion(msg)
-    print("DEBUG: sync complete, total posted:", len(replies))
+        post_to_notion(msg['user'], msg['text'], msg['ts'])
 
-if __name__ == "__main__":
+if __name__=="__main__":
     main()
